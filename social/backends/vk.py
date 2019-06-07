@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 VK.com OpenAPI, OAuth2 and Iframe application OAuth2 backends, docs at:
-    http://psa.matiasaguirre.net/docs/backends/vk.html
+    https://python-social-auth.readthedocs.io/en/latest/backends/vk.html
 """
+import json
 from time import time
 from hashlib import md5
 
-from social.utils import parse_qs
-from social.backends.base import BaseAuth
-from social.backends.oauth import BaseOAuth2
-from social.exceptions import AuthTokenRevoked, AuthException
+from ..utils import parse_qs
+from .base import BaseAuth
+from .oauth import BaseOAuth2
+from ..exceptions import AuthTokenRevoked, AuthException
 
 
 class VKontakteOpenAPI(BaseAuth):
@@ -76,7 +77,7 @@ class VKontakteOpenAPI(BaseAuth):
 class VKOAuth2(BaseOAuth2):
     """VKOAuth2 authentication backend"""
     name = 'vk-oauth2'
-    ID_KEY = 'user_id'
+    ID_KEY = 'id'
     AUTHORIZATION_URL = 'http://oauth.vk.com/authorize'
     ACCESS_TOKEN_URL = 'https://oauth.vk.com/access_token'
     ACCESS_TOKEN_METHOD = 'POST'
@@ -126,17 +127,6 @@ class VKAppOAuth2(VKOAuth2):
     """VK.com Application Authentication support"""
     name = 'vk-app'
 
-    def user_profile(self, user_id, access_token=None):
-        request_data = ['first_name', 'last_name', 'screen_name', 'nickname',
-                        'photo'] + self.setting('EXTRA_DATA', [])
-        fields = ','.join(set(request_data))
-        data = {'uids': user_id, 'fields': fields}
-        if access_token:
-            data['access_token'] = access_token
-        profiles = vk_api(self, 'getProfiles', data).get('response')
-        if profiles:
-            return profiles[0]
-
     def auth_complete(self, *args, **kwargs):
         required_params = ('is_app_user', 'viewer_id', 'access_token',
                            'api_id')
@@ -162,8 +152,11 @@ class VKAppOAuth2(VKOAuth2):
             if user_check == 1:
                 is_user = self.data.get('is_app_user')
             elif user_check == 2:
-                is_user = vk_api(self, 'isAppUser',
-                                        {'uid': user_id}).get('response', 0)
+                is_user = vk_api(
+                    self,
+                    'isAppUser',
+                    {'user_id': user_id}
+                ).get('response', 0)
             if not int(is_user):
                 return None
 
@@ -172,10 +165,10 @@ class VKAppOAuth2(VKOAuth2):
             'backend': self,
             'request': self.strategy.request_data(),
             'response': {
-                'user_id': user_id,
+                self.ID_KEY: user_id,
             }
         }
-        auth_data['response'].update(self.user_profile(user_id))
+        auth_data['response'].update(json.loads(auth_data['request']['api_result'])['response'][0])
         return self.strategy.authenticate(*args, **auth_data)
 
 
@@ -186,7 +179,7 @@ def vk_api(backend, method, data):
         http://goo.gl/yLcaa
     """
     # We need to perform server-side call if no access_token
-    data['v'] = backend.setting('API_VERSION', '3.0')
+    data['v'] = backend.setting('API_VERSION', '5.53')
     if 'access_token' not in data:
         key, secret = backend.get_key_and_secret()
         if 'api_id' not in data:
