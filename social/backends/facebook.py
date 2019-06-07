@@ -1,6 +1,6 @@
 """
 Facebook OAuth2 and Canvas Application backends, docs at:
-    http://psa.matiasaguirre.net/docs/backends/facebook.html
+    https://python-social-auth.readthedocs.io/en/latest/backends/facebook.html
 """
 import hmac
 import time
@@ -8,26 +8,47 @@ import json
 import base64
 import hashlib
 
-from social.utils import parse_qs, constant_time_compare, handle_http_errors
-from social.backends.oauth import BaseOAuth2
-from social.exceptions import AuthException, AuthCanceled, AuthUnknownError, \
-                              AuthMissingParameter
+from ..utils import parse_qs, constant_time_compare, handle_http_errors
+from .oauth import BaseOAuth2
+from ..exceptions import AuthException, AuthCanceled, AuthUnknownError, \
+                         AuthMissingParameter
+
+
+API_VERSION = 3.2
 
 
 class FacebookOAuth2(BaseOAuth2):
     """Facebook OAuth2 authentication backend"""
     name = 'facebook'
+    REDIRECT_STATE = False
     RESPONSE_TYPE = None
     SCOPE_SEPARATOR = ','
-    AUTHORIZATION_URL = 'https://www.facebook.com/v2.7/dialog/oauth'
-    ACCESS_TOKEN_URL = 'https://graph.facebook.com/v2.7/oauth/access_token'
-    REVOKE_TOKEN_URL = 'https://graph.facebook.com/v2.7/{uid}/permissions'
+    AUTHORIZATION_URL = 'https://www.facebook.com/v{version}/dialog/oauth'
+    ACCESS_TOKEN_URL = \
+        'https://graph.facebook.com/v{version}/oauth/access_token'
+    REVOKE_TOKEN_URL = \
+        'https://graph.facebook.com/v{version}/{uid}/permissions'
     REVOKE_TOKEN_METHOD = 'DELETE'
-    USER_DATA_URL = 'https://graph.facebook.com/v2.7/me'
+    USER_DATA_URL = 'https://graph.facebook.com/v{version}/me'
     EXTRA_DATA = [
         ('id', 'id'),
-        ('expires', 'expires')
+        ('expires', 'expires'),
+        ('granted_scopes', 'granted_scopes'),
+        ('denied_scopes', 'denied_scopes')
     ]
+
+    def auth_params(self, state=None):
+        params = super(FacebookOAuth2, self).auth_params(state)
+        params['return_scopes'] = 'true'
+        return params
+
+    def authorization_url(self):
+        version = self.setting('API_VERSION', API_VERSION)
+        return self.AUTHORIZATION_URL.format(version=version)
+
+    def access_token_url(self):
+        version = self.setting('API_VERSION', API_VERSION)
+        return self.ACCESS_TOKEN_URL.format(version=version)
 
     def get_user_details(self, response):
         """Return user details from Facebook account"""
@@ -54,7 +75,10 @@ class FacebookOAuth2(BaseOAuth2):
                 msg=access_token.encode('utf8'),
                 digestmod=hashlib.sha256
             ).hexdigest()
-        return self.get_json(self.USER_DATA_URL, params=params)
+
+        version = self.setting('API_VERSION', API_VERSION)
+        return self.get_json(self.USER_DATA_URL.format(version=version),
+                             params=params)
 
     def process_error(self, data):
         super(FacebookOAuth2, self).process_error(data)
@@ -64,13 +88,13 @@ class FacebookOAuth2(BaseOAuth2):
 
     @handle_http_errors
     def auth_complete(self, *args, **kwargs):
-        """Completes loging process, must return user instance"""
+        """Completes login process, must return user instance"""
         self.process_error(self.data)
         if not self.data.get('code'):
             raise AuthMissingParameter(self, 'code')
         state = self.validate_state()
         key, secret = self.get_key_and_secret()
-        response = self.request(self.ACCESS_TOKEN_URL, params={
+        response = self.request(self.access_token_url(), params={
             'client_id': key,
             'redirect_uri': self.get_redirect_uri(state),
             'client_secret': secret,
@@ -87,7 +111,10 @@ class FacebookOAuth2(BaseOAuth2):
         return self.do_auth(access_token, response, *args, **kwargs)
 
     def process_refresh_token_response(self, response, *args, **kwargs):
-        return parse_qs(response.content)
+        try:
+            return response.json()
+        except ValueError:
+            return parse_qs(response.content)
 
     def refresh_token_params(self, token, *args, **kwargs):
         client_id, client_secret = self.get_key_and_secret()
@@ -113,13 +140,21 @@ class FacebookOAuth2(BaseOAuth2):
                                          'users Facebook data')
 
         data['access_token'] = access_token
-        if 'expires' in response:
-            data['expires'] = response['expires']
+        if 'expires_in' in response:
+            data['expires'] = response['expires_in']
+
+        if self.data.get('granted_scopes'):
+            data['granted_scopes'] = self.data['granted_scopes'].split(',')
+
+        if self.data.get('denied_scopes'):
+            data['denied_scopes'] = self.data['denied_scopes'].split(',')
+
         kwargs.update({'backend': self, 'response': data})
         return self.strategy.authenticate(*args, **kwargs)
 
     def revoke_token_url(self, token, uid):
-        return self.REVOKE_TOKEN_URL.format(uid=uid)
+        version = self.setting('API_VERSION', API_VERSION)
+        return self.REVOKE_TOKEN_URL.format(version=version, uid=uid)
 
     def revoke_token_params(self, token, uid):
         return {'access_token': token}
@@ -138,7 +173,7 @@ class FacebookAppOAuth2(FacebookOAuth2):
         return False
 
     def auth_complete(self, *args, **kwargs):
-        access_token = None
+        access_token = self.data.get('access_token')
         response = {}
 
         if 'signed_request' in self.data:
@@ -196,15 +231,3 @@ class FacebookAppOAuth2(FacebookOAuth2):
             if constant_time_compare(sig, expected_sig) and \
                data['issued_at'] > (time.time() - 86400):
                 return data
-
-
-class Facebook2OAuth2(FacebookOAuth2):
-    """Facebook OAuth2 authentication backend using Facebook Open Graph 2.0"""
-    AUTHORIZATION_URL = 'https://www.facebook.com/v2.0/dialog/oauth'
-    ACCESS_TOKEN_URL = 'https://graph.facebook.com/v2.0/oauth/access_token'
-    REVOKE_TOKEN_URL = 'https://graph.facebook.com/v2.0/{uid}/permissions'
-    USER_DATA_URL = 'https://graph.facebook.com/v2.0/me'
-
-
-class Facebook2AppOAuth2(Facebook2OAuth2, FacebookAppOAuth2):
-    pass
