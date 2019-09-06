@@ -8,8 +8,6 @@ from social.apps.django_app import views
 
 extra = getattr(settings, setting_name('TRAILING_SLASH'), True) and '/' or ''
 
-app_name = 'social'
-
 urlpatterns = [
     # authentication / association
     url(r'^login/(?P<backend>[^/]+){0}$'.format(extra), views.auth,
